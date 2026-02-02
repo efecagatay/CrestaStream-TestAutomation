@@ -1,0 +1,143 @@
+# CrestaStream Nightly Regression Tests
+# Her gece kapsamlı testler çalıştırır
+
+name: Nightly Regression
+
+on:
+  schedule:
+    # Her gece 02:00 UTC (04:00 Berlin)
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20.x'
+  BASE_URL: ${{ vars.PROD_BASE_URL || 'https://crestastream.example.com' }}
+  API_URL: ${{ vars.PROD_API_URL || 'https://api.crestastream.example.com' }}
+
+jobs:
+  full-regression:
+    name: 🌙 Full Regression Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📚 Install dependencies
+        run: npm ci
+
+      - name: 🎭 Install Playwright browsers
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+
+      - name: 🧪 Run all tests
+        run: |
+          npx playwright test \
+            --project=${{ matrix.browser }} \
+            --workers=2 \
+            --retries=2 \
+            --reporter=html,json,junit
+        env:
+          BASE_URL: ${{ env.BASE_URL }}
+          API_URL: ${{ env.API_URL }}
+          CI: true
+
+      - name: 📊 Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-${{ matrix.browser }}-results
+          path: |
+            playwright-report/
+            test-results/
+            results.xml
+          retention-days: 14
+
+  performance-tests:
+    name: ⚡ Performance Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📚 Install dependencies
+        run: npm ci
+
+      - name: 🎭 Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: ⚡ Run performance tests
+        run: |
+          npx playwright test tests/e2e/ \
+            --project=chromium \
+            --grep="@performance" \
+            --reporter=html,json
+        env:
+          BASE_URL: ${{ env.BASE_URL }}
+          CI: true
+
+      - name: 📊 Upload performance results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance-results
+          path: playwright-report/
+          retention-days: 14
+
+  security-scan:
+    name: 🔒 Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📚 Install dependencies
+        run: npm ci
+
+      - name: 🔒 Run npm audit
+        run: npm audit --audit-level=moderate
+        continue-on-error: true
+
+      - name: 🔍 Run dependency check
+        run: npx depcheck
+        continue-on-error: true
+
+  notify-results:
+    name: 📢 Notify Results
+    runs-on: ubuntu-latest
+    needs: [full-regression, performance-tests]
+    if: always()
+    steps:
+      - name: 📢 Send notification
+        run: |
+          echo "## 🌙 Nightly Regression Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Browser | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Chromium | ${{ contains(needs.full-regression.result, 'success') && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Firefox | ${{ contains(needs.full-regression.result, 'success') && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| WebKit | ${{ contains(needs.full-regression.result, 'success') && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Performance Tests: ${{ needs.performance-tests.result == 'success' && '✅' || '❌' }}" >> $GITHUB_STEP_SUMMARY

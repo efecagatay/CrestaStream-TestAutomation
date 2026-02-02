@@ -1,0 +1,65 @@
+# CrestaStream PR Smoke Tests
+# Pull Request'lerde hızlı doğrulama için çalışır
+
+name: PR Smoke Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  NODE_VERSION: '20.x'
+  BASE_URL: ${{ vars.BASE_URL || 'https://staging.crestastream.example.com' }}
+
+jobs:
+  smoke-tests:
+    name: 🚀 Smoke Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📚 Install dependencies
+        run: npm ci
+
+      - name: 🎭 Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: 🚀 Run smoke tests
+        run: |
+          npx playwright test tests/e2e/ \
+            --project=chromium \
+            --grep="@smoke" \
+            --reporter=github,line
+        env:
+          BASE_URL: ${{ env.BASE_URL }}
+          CI: true
+
+      - name: 📊 Upload results on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: pr-smoke-results
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 5
+
+      - name: 💬 Comment PR on failure
+        uses: actions/github-script@v7
+        if: failure()
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '❌ **Smoke tests failed!** Please check the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.'
+            })
